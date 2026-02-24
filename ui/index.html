@@ -15,14 +15,38 @@
   <!-- Header -->
   <header class="flex items-center justify-between px-6 py-3 bg-gray-800 border-b border-gray-700">
     <h1 class="text-xl font-bold text-indigo-400">⚗️ Veritaserum</h1>
-    <button onclick="exportState()"
-      class="text-sm px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 transition">
-      Export JSON
-    </button>
+    <div class="flex gap-2">
+      <button onclick="loadData()"
+        class="text-sm px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 transition">
+        Refresh
+      </button>
+      <button onclick="exportState()"
+        class="text-sm px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 transition">
+        Export JSON
+      </button>
+    </div>
   </header>
 
   <main class="flex-1 p-6 max-w-4xl mx-auto w-full space-y-6">
-    <p class="text-xs text-gray-500">Auto-refreshing every 2s. Configure pending intercepts below.</p>
+    <p class="text-xs text-gray-500">Click Refresh to reload data. Configure pending intercepts below.</p>
+
+    <section>
+      <h2 class="text-sm font-semibold text-cyan-400 mb-2">Provision Database</h2>
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-gray-400">Schema SQL</label>
+          <textarea id="prov-schema" rows="5" class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500" placeholder="CREATE TABLE users (id INT, name VARCHAR(255));"></textarea>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-gray-400">Hydrate SQL</label>
+          <textarea id="prov-hydrate" rows="5" class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500" placeholder="INSERT INTO users VALUES (1, 'Alice');"></textarea>
+        </div>
+        <button onclick="provisionDB()" class="px-4 py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 transition text-sm font-semibold">
+          Provision MySQL
+        </button>
+      </div>
+      <div id="db-list" class="space-y-2 mt-3"></div>
+    </section>
 
     <section>
       <h2 class="text-sm font-semibold text-yellow-400 mb-2">Pending</h2>
@@ -37,13 +61,42 @@
 
   <script>
     async function loadData() {
-      const [pendingRes, mocksRes] = await Promise.all([
+      const [pendingRes, mocksRes, dbRes] = await Promise.all([
         fetch('/api/pending'),
-        fetch('/api/mocks')
+        fetch('/api/mocks'),
+        fetch('/api/databases'),
       ]);
       const pending = await pendingRes.json();
       const configured = await mocksRes.json();
       render(pending || [], configured || []);
+      renderDBs(await dbRes.json() || []);
+    }
+
+    async function provisionDB() {
+      const schema  = document.getElementById('prov-schema').value;
+      const hydrate = document.getElementById('prov-hydrate').value;
+      await fetch('/api/databases', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({type: 'MYSQL', schema, hydrate}),
+      });
+    }
+
+    function renderDBs(dbs) {
+      const el = document.getElementById('db-list');
+      if (!dbs.length) { el.innerHTML = ''; return; }
+      el.innerHTML = dbs.map(db => `
+        <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 flex items-center gap-3 flex-wrap">
+          <span class="text-xs font-bold px-2 py-0.5 rounded ${
+            db.status === 'ready'  ? 'bg-green-900 text-green-300'
+            : db.status === 'error' ? 'bg-red-900 text-red-300'
+            : 'bg-yellow-900 text-yellow-300'
+          }">${db.status.toUpperCase()}</span>
+          <span class="text-xs text-gray-400">${db.type}</span>
+          ${db.jdbcUrl ? `<code class="text-xs text-cyan-300 break-all">${db.jdbcUrl}</code>` : ''}
+          ${db.error   ? `<span class="text-xs text-red-400">${db.error}</span>` : ''}
+        </div>
+      `).join('');
     }
 
     function protocolBadge(protocol) {
@@ -58,13 +111,52 @@
       if (pending.length === 0) {
         pendingEl.innerHTML = '<p class="text-gray-500 text-sm">No pending intercepts. Make a proxied request to see it here.</p>';
       } else {
-        pendingEl.innerHTML = pending.map(renderPendingCard).join('');
+        // Clear placeholder text if present
+        if (pendingEl.querySelector('p')) pendingEl.innerHTML = '';
+
+        const currentSafeIds = new Set(pending.map(item => {
+          const identifier = item.protocol !== 'POSTGRES' ? `${item.method} ${item.url}` : item.query;
+          return encodeURIComponent(identifier);
+        }));
+
+        // Remove cards that are no longer pending
+        pendingEl.querySelectorAll('[data-safe-id]').forEach(card => {
+          if (!currentSafeIds.has(card.dataset.safeId)) card.remove();
+        });
+
+        // Add only new cards (don't touch existing ones — preserves user input)
+        for (const item of pending) {
+          const identifier = item.protocol !== 'POSTGRES' ? `${item.method} ${item.url}` : item.query;
+          const safeId = encodeURIComponent(identifier);
+          if (!document.getElementById(`body-${safeId}`)) {
+            pendingEl.insertAdjacentHTML('beforeend', renderPendingCard(item));
+          }
+        }
       }
 
       if (configured.length === 0) {
         mocksEl.innerHTML = '<p class="text-gray-500 text-sm">No configured mocks yet.</p>';
       } else {
-        mocksEl.innerHTML = configured.map(renderConfiguredCard).join('');
+        if (mocksEl.querySelector('p')) mocksEl.innerHTML = '';
+
+        const currentConfIds = new Set(configured.map(item => {
+          const identifier = item.protocol !== 'POSTGRES' ? `${item.method} ${item.url}` : item.query;
+          return encodeURIComponent(identifier);
+        }));
+
+        // Remove cards no longer configured
+        mocksEl.querySelectorAll('[data-conf-id]').forEach(card => {
+          if (!currentConfIds.has(card.dataset.confId)) card.remove();
+        });
+
+        // Add only new cards (preserves open edit forms)
+        for (const item of configured) {
+          const identifier = item.protocol !== 'POSTGRES' ? `${item.method} ${item.url}` : item.query;
+          const safeId = encodeURIComponent(identifier);
+          if (!mocksEl.querySelector(`[data-conf-id="${safeId}"]`)) {
+            mocksEl.insertAdjacentHTML('beforeend', renderConfiguredCard(item));
+          }
+        }
       }
     }
 
@@ -74,7 +166,7 @@
       const safeId = encodeURIComponent(identifier);
 
       return `
-        <div class="bg-gray-800 rounded-lg p-4 border border-yellow-700 space-y-3">
+        <div class="bg-gray-800 rounded-lg p-4 border border-yellow-700 space-y-3" data-safe-id="${safeId}">
           <div class="flex items-center gap-3 flex-wrap">
             <span class="text-xs font-bold px-2 py-0.5 rounded bg-yellow-900 text-yellow-300">PENDING</span>
             ${protocolBadge(item.protocol)}
@@ -110,19 +202,53 @@
     function renderConfiguredCard(item) {
       const isHTTP = item.protocol !== 'POSTGRES';
       const identifier = isHTTP ? `${item.method} ${item.url}` : item.query;
+      const safeId = encodeURIComponent(identifier);
 
       return `
-        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-start gap-4">
-          <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-900 text-green-300 shrink-0">CONFIGURED</span>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2 flex-wrap">
-              ${protocolBadge(item.protocol)}
-              <span class="text-gray-300 text-sm break-all">${identifier}</span>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3" data-conf-id="${safeId}">
+          <div class="flex items-start gap-4">
+            <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-900 text-green-300 shrink-0">CONFIGURED</span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                ${protocolBadge(item.protocol)}
+                <span class="text-gray-300 text-sm break-all">${identifier}</span>
+              </div>
+              ${isHTTP ? `<p class="text-xs text-gray-400 mt-1">Status: ${item.statusCode} &nbsp;|&nbsp; Latency: ${item.latencyMs}ms</p>` : ''}
+              <pre class="text-xs text-gray-400 mt-1 truncate max-w-lg">${item.responseBody}</pre>
             </div>
-            ${isHTTP ? `<p class="text-xs text-gray-400 mt-1">Status: ${item.statusCode} &nbsp;|&nbsp; Latency: ${item.latencyMs}ms</p>` : ''}
-            <pre class="text-xs text-gray-400 mt-1 truncate max-w-lg">${item.responseBody}</pre>
+            <button onclick="toggleEdit('${safeId}')"
+              class="text-xs px-2 py-1 rounded bg-gray-600 hover:bg-gray-500 transition shrink-0">Edit</button>
+          </div>
+          <div id="edit-${safeId}" class="hidden border-t border-gray-700 pt-3 space-y-3">
+            ${isHTTP ? `
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-1">
+                <label class="text-xs text-gray-400">Status Code</label>
+                <input id="sc-${safeId}" type="number" value="${item.statusCode}"
+                  class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs text-gray-400">Latency (ms)</label>
+                <input id="lat-${safeId}" type="number" value="${item.latencyMs}"
+                  class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            </div>
+            ` : ''}
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-gray-400">Response Body (JSON)</label>
+              <textarea id="body-${safeId}" rows="4"
+                class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500">${item.responseBody}</textarea>
+            </div>
+            <button onclick="saveMock('${item.protocol}', '${safeId}', '${escapeAttr(identifier)}')"
+              class="px-4 py-1.5 rounded bg-green-700 hover:bg-green-600 transition text-sm font-semibold">
+              Save Mock
+            </button>
           </div>
         </div>`;
+    }
+
+    function toggleEdit(safeId) {
+      document.getElementById(`edit-${safeId}`).classList.toggle('hidden');
     }
 
     async function saveMock(protocol, safeId, identifier) {
@@ -161,7 +287,6 @@
       return str.replace(/'/g, "\\'");
     }
 
-    setInterval(loadData, 2000);
     loadData();
   </script>
 </body>

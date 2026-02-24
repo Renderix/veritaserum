@@ -2,12 +2,15 @@ package messaging
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"veritaserum/src/dbs"
 	"veritaserum/src/store"
 )
 
@@ -101,6 +104,35 @@ func StartAPIServer(port string, uiFiles fs.FS) {
 		}
 		log.Printf("STATE exported to %s", store.StateFile)
 		c.Status(http.StatusNoContent)
+	})
+
+	// POST /api/databases — provision a real MySQL Docker container
+	r.POST("/api/databases", func(c *gin.Context) {
+		var req struct {
+			Type    string `json:"type"`
+			Schema  string `json:"schema"`
+			Hydrate string `json:"hydrate"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.Type != "MYSQL" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "type must be MYSQL"})
+			return
+		}
+		id := fmt.Sprintf("%d", time.Now().UnixNano())
+		entry := &store.ProvisionedDB{ID: id, Type: "MYSQL", Status: "provisioning"}
+		store.ProvisionedDBsMu.Lock()
+		store.ProvisionedDBs = append(store.ProvisionedDBs, entry)
+		store.ProvisionedDBsMu.Unlock()
+
+		go dbs.ProvisionMySQL(id, req.Schema, req.Hydrate)
+
+		c.JSON(http.StatusAccepted, entry)
+	})
+
+	// GET /api/databases — list all provisioned DB instances
+	r.GET("/api/databases", func(c *gin.Context) {
+		store.ProvisionedDBsMu.RLock()
+		c.JSON(http.StatusOK, store.ProvisionedDBs)
+		store.ProvisionedDBsMu.RUnlock()
 	})
 
 	log.Printf("API/UI listening on :%s  →  http://localhost:%s/", port, port)

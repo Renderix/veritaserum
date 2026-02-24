@@ -7,6 +7,70 @@ import (
 	"sync"
 )
 
+// ---- Provisioned DBs --------------------------------------------------------
+
+type ProvisionedDB struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	ContainerID string `json:"containerId,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	JDBCUrl     string `json:"jdbcUrl,omitempty"`
+	Status      string `json:"status"` // "provisioning" | "ready" | "error"
+	Error       string `json:"error,omitempty"`
+}
+
+var (
+	ProvisionedDBs   []*ProvisionedDB
+	ProvisionedDBsMu sync.RWMutex
+)
+
+func FindProvisionedDB(id string) *ProvisionedDB {
+	ProvisionedDBsMu.RLock()
+	defer ProvisionedDBsMu.RUnlock()
+	for _, db := range ProvisionedDBs {
+		if db.ID == id {
+			return db
+		}
+	}
+	return nil
+}
+
+func UpdateProvisionedDB(id, containerID string, port int) {
+	ProvisionedDBsMu.Lock()
+	defer ProvisionedDBsMu.Unlock()
+	for _, db := range ProvisionedDBs {
+		if db.ID == id {
+			db.ContainerID = containerID
+			db.Port = port
+			return
+		}
+	}
+}
+
+func ReadyProvisionedDB(id, jdbcURL string) {
+	ProvisionedDBsMu.Lock()
+	defer ProvisionedDBsMu.Unlock()
+	for _, db := range ProvisionedDBs {
+		if db.ID == id {
+			db.JDBCUrl = jdbcURL
+			db.Status = "ready"
+			return
+		}
+	}
+}
+
+func FailProvisionedDB(id, errMsg string) {
+	ProvisionedDBsMu.Lock()
+	defer ProvisionedDBsMu.Unlock()
+	for _, db := range ProvisionedDBs {
+		if db.ID == id {
+			db.Status = "error"
+			db.Error = errMsg
+			return
+		}
+	}
+}
+
 // ---- Types ---------------------------------------------------------------
 
 type Status string
