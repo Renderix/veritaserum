@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Veritaserum</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between px-6 py-3 bg-gray-800 border-b border-gray-700">
+    <h1 class="text-xl font-bold text-indigo-400">⚗️ Veritaserum</h1>
+    <button onclick="exportState()"
+      class="text-sm px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 transition">
+      Export JSON
+    </button>
+  </header>
+
+  <main class="flex-1 p-6 max-w-4xl mx-auto w-full space-y-4">
+    <p class="text-xs text-gray-500">Auto-refreshing every 2s. Configure pending intercepts below.</p>
+    <div id="intercept-list" class="space-y-3"></div>
+  </main>
+
+  <script>
+    async function loadIntercepts() {
+      const res = await fetch('/api/intercepts');
+      const list = await res.json();
+      render(list || []);
+    }
+
+    function render(list) {
+      const container = document.getElementById('intercept-list');
+
+      if (list.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-sm">No intercepts yet. Make a proxied request to see it here.</p>';
+        return;
+      }
+
+      // Sort: pending first
+      list.sort((a, b) => (a.state === 'pending' ? -1 : 1));
+
+      container.innerHTML = list.map(item => {
+        const key = encodeURIComponent(item.method + ' ' + item.url);
+        if (item.state === 'pending') {
+          return `
+            <div class="bg-gray-800 rounded-lg p-4 border border-yellow-700 space-y-3" id="card-${key}">
+              <div class="flex items-center gap-3">
+                <span class="text-xs font-bold px-2 py-0.5 rounded bg-yellow-900 text-yellow-300">PENDING</span>
+                <span class="text-indigo-400 font-bold text-sm">${item.method}</span>
+                <span class="text-gray-300 text-sm break-all">${item.url}</span>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1">
+                  <label class="text-xs text-gray-400">Status Code</label>
+                  <input id="sc-${key}" type="number" value="200"
+                    class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label class="text-xs text-gray-400">Latency (ms)</label>
+                  <input id="lat-${key}" type="number" value="0"
+                    class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs text-gray-400">Response Body</label>
+                <textarea id="body-${key}" rows="4"
+                  class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder='{"status": "ok"}'></textarea>
+              </div>
+              <button onclick="configureMock('${item.method}', '${item.url}', '${key}')"
+                class="px-4 py-1.5 rounded bg-green-700 hover:bg-green-600 transition text-sm font-semibold">
+                Save Mock
+              </button>
+            </div>`;
+        } else {
+          return `
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-start gap-4">
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-900 text-green-300 shrink-0">CONFIGURED</span>
+              <div class="min-w-0">
+                <p class="text-sm"><span class="text-indigo-400 font-bold">${item.method}</span> <span class="text-gray-300 break-all">${item.url}</span></p>
+                <p class="text-xs text-gray-400 mt-1">Status: ${item.statusCode} &nbsp;|&nbsp; Latency: ${item.latencyMs}ms</p>
+                <pre class="text-xs text-gray-400 mt-1 truncate max-w-lg">${item.responseBody}</pre>
+              </div>
+              <button onclick="editMock('${item.method}', '${item.url}')"
+                class="ml-auto shrink-0 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition">
+                Edit
+              </button>
+            </div>`;
+        }
+      }).join('');
+    }
+
+    async function configureMock(method, url, key) {
+      const statusCode = parseInt(document.getElementById(`sc-${key}`).value, 10);
+      const latencyMs  = parseInt(document.getElementById(`lat-${key}`).value, 10);
+      const responseBody = document.getElementById(`body-${key}`).value;
+
+      await fetch('/api/intercepts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({method, url, statusCode, latencyMs, responseBody}),
+      });
+      loadIntercepts();
+    }
+
+    async function editMock(method, url) {
+      // Re-mark as pending so the editor shows again
+      await fetch('/api/intercepts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        // POST with statusCode 0 signals "reconfigure" — the real values can be re-entered
+        body: JSON.stringify({method, url, statusCode: 200, latencyMs: 0, responseBody: ''}),
+      });
+      loadIntercepts();
+    }
+
+    async function exportState() {
+      const res = await fetch('/api/export', {method: 'POST'});
+      const data = await res.json();
+      alert(data.status === 'saved' ? 'Saved to veritaserum.json ✓' : 'Error saving');
+    }
+
+    loadIntercepts();
+    setInterval(loadIntercepts, 2000);
+  </script>
+</body>
+</html>
