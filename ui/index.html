@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Veritaserum</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .badge-blue   { display:inline-block; font-size:.65rem; font-weight:700; padding:.1rem .4rem; border-radius:.25rem; background:#1e3a5f; color:#93c5fd; }
+    .badge-purple { display:inline-block; font-size:.65rem; font-weight:700; padding:.1rem .4rem; border-radius:.25rem; background:#3b1f5f; color:#d8b4fe; }
+  </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
 
@@ -17,112 +21,148 @@
     </button>
   </header>
 
-  <main class="flex-1 p-6 max-w-4xl mx-auto w-full space-y-4">
+  <main class="flex-1 p-6 max-w-4xl mx-auto w-full space-y-6">
     <p class="text-xs text-gray-500">Auto-refreshing every 2s. Configure pending intercepts below.</p>
-    <div id="intercept-list" class="space-y-3"></div>
+
+    <section>
+      <h2 class="text-sm font-semibold text-yellow-400 mb-2">Pending</h2>
+      <div id="pending-list" class="space-y-3"></div>
+    </section>
+
+    <section>
+      <h2 class="text-sm font-semibold text-green-400 mb-2">Configured Mocks</h2>
+      <div id="mocks-list" class="space-y-3"></div>
+    </section>
   </main>
 
   <script>
-    async function loadIntercepts() {
-      const res = await fetch('/api/intercepts');
-      const list = await res.json();
-      render(list || []);
+    async function loadData() {
+      const [pendingRes, mocksRes] = await Promise.all([
+        fetch('/api/pending'),
+        fetch('/api/mocks')
+      ]);
+      const pending = await pendingRes.json();
+      const configured = await mocksRes.json();
+      render(pending || [], configured || []);
     }
 
-    function render(list) {
-      const container = document.getElementById('intercept-list');
+    function protocolBadge(protocol) {
+      const cls = protocol === 'POSTGRES' ? 'badge-purple' : 'badge-blue';
+      return `<span class="${cls}">${protocol}</span>`;
+    }
 
-      if (list.length === 0) {
-        container.innerHTML = '<p class="text-gray-500 text-sm">No intercepts yet. Make a proxied request to see it here.</p>';
-        return;
+    function render(pending, configured) {
+      const pendingEl = document.getElementById('pending-list');
+      const mocksEl   = document.getElementById('mocks-list');
+
+      if (pending.length === 0) {
+        pendingEl.innerHTML = '<p class="text-gray-500 text-sm">No pending intercepts. Make a proxied request to see it here.</p>';
+      } else {
+        pendingEl.innerHTML = pending.map(renderPendingCard).join('');
       }
 
-      // Sort: pending first
-      list.sort((a, b) => (a.state === 'pending' ? -1 : 1));
-
-      container.innerHTML = list.map(item => {
-        const key = encodeURIComponent(item.method + ' ' + item.url);
-        if (item.state === 'pending') {
-          return `
-            <div class="bg-gray-800 rounded-lg p-4 border border-yellow-700 space-y-3" id="card-${key}">
-              <div class="flex items-center gap-3">
-                <span class="text-xs font-bold px-2 py-0.5 rounded bg-yellow-900 text-yellow-300">PENDING</span>
-                <span class="text-indigo-400 font-bold text-sm">${item.method}</span>
-                <span class="text-gray-300 text-sm break-all">${item.url}</span>
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                <div class="flex flex-col gap-1">
-                  <label class="text-xs text-gray-400">Status Code</label>
-                  <input id="sc-${key}" type="number" value="200"
-                    class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <label class="text-xs text-gray-400">Latency (ms)</label>
-                  <input id="lat-${key}" type="number" value="0"
-                    class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-              </div>
-              <div class="flex flex-col gap-1">
-                <label class="text-xs text-gray-400">Response Body</label>
-                <textarea id="body-${key}" rows="4"
-                  class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder='{"status": "ok"}'></textarea>
-              </div>
-              <button onclick="configureMock('${item.method}', '${item.url}', '${key}')"
-                class="px-4 py-1.5 rounded bg-green-700 hover:bg-green-600 transition text-sm font-semibold">
-                Save Mock
-              </button>
-            </div>`;
-        } else {
-          return `
-            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-start gap-4">
-              <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-900 text-green-300 shrink-0">CONFIGURED</span>
-              <div class="min-w-0">
-                <p class="text-sm"><span class="text-indigo-400 font-bold">${item.method}</span> <span class="text-gray-300 break-all">${item.url}</span></p>
-                <p class="text-xs text-gray-400 mt-1">Status: ${item.statusCode} &nbsp;|&nbsp; Latency: ${item.latencyMs}ms</p>
-                <pre class="text-xs text-gray-400 mt-1 truncate max-w-lg">${item.responseBody}</pre>
-              </div>
-              <button onclick="editMock('${item.method}', '${item.url}')"
-                class="ml-auto shrink-0 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition">
-                Edit
-              </button>
-            </div>`;
-        }
-      }).join('');
+      if (configured.length === 0) {
+        mocksEl.innerHTML = '<p class="text-gray-500 text-sm">No configured mocks yet.</p>';
+      } else {
+        mocksEl.innerHTML = configured.map(renderConfiguredCard).join('');
+      }
     }
 
-    async function configureMock(method, url, key) {
-      const statusCode = parseInt(document.getElementById(`sc-${key}`).value, 10);
-      const latencyMs  = parseInt(document.getElementById(`lat-${key}`).value, 10);
-      const responseBody = document.getElementById(`body-${key}`).value;
+    function renderPendingCard(item) {
+      const isHTTP = item.protocol !== 'POSTGRES';
+      const identifier = isHTTP ? `${item.method} ${item.url}` : item.query;
+      const safeId = encodeURIComponent(identifier);
 
-      await fetch('/api/intercepts', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({method, url, statusCode, latencyMs, responseBody}),
-      });
-      loadIntercepts();
+      return `
+        <div class="bg-gray-800 rounded-lg p-4 border border-yellow-700 space-y-3">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-bold px-2 py-0.5 rounded bg-yellow-900 text-yellow-300">PENDING</span>
+            ${protocolBadge(item.protocol)}
+            <span class="text-gray-300 text-sm break-all">${identifier}</span>
+          </div>
+          ${isHTTP ? `
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-gray-400">Status Code</label>
+              <input id="sc-${safeId}" type="number" value="200"
+                class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-gray-400">Latency (ms)</label>
+              <input id="lat-${safeId}" type="number" value="0"
+                class="bg-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+          </div>
+          ` : ''}
+          <div class="flex flex-col gap-1">
+            <label class="text-xs text-gray-400">Response Body (JSON)</label>
+            <textarea id="body-${safeId}" rows="4"
+              class="bg-gray-700 rounded px-2 py-1 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder='[{"id":1,"name":"Alice"}]'></textarea>
+          </div>
+          <button onclick="saveMock('${item.protocol}', '${safeId}', '${escapeAttr(identifier)}')"
+            class="px-4 py-1.5 rounded bg-green-700 hover:bg-green-600 transition text-sm font-semibold">
+            Save Mock
+          </button>
+        </div>`;
     }
 
-    async function editMock(method, url) {
-      // Re-mark as pending so the editor shows again
-      await fetch('/api/intercepts', {
+    function renderConfiguredCard(item) {
+      const isHTTP = item.protocol !== 'POSTGRES';
+      const identifier = isHTTP ? `${item.method} ${item.url}` : item.query;
+
+      return `
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 flex items-start gap-4">
+          <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-900 text-green-300 shrink-0">CONFIGURED</span>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              ${protocolBadge(item.protocol)}
+              <span class="text-gray-300 text-sm break-all">${identifier}</span>
+            </div>
+            ${isHTTP ? `<p class="text-xs text-gray-400 mt-1">Status: ${item.statusCode} &nbsp;|&nbsp; Latency: ${item.latencyMs}ms</p>` : ''}
+            <pre class="text-xs text-gray-400 mt-1 truncate max-w-lg">${item.responseBody}</pre>
+          </div>
+        </div>`;
+    }
+
+    async function saveMock(protocol, safeId, identifier) {
+      const bodyEl = document.getElementById(`body-${safeId}`);
+      const payload = {
+        protocol,
+        responseBody: bodyEl ? bodyEl.value : '',
+      };
+
+      if (protocol === 'POSTGRES') {
+        payload.query = identifier;
+      } else {
+        const parts = identifier.split(' ');
+        payload.method = parts[0];
+        payload.url    = parts.slice(1).join(' ');
+        const scEl  = document.getElementById(`sc-${safeId}`);
+        const latEl = document.getElementById(`lat-${safeId}`);
+        payload.statusCode = parseInt(scEl ? scEl.value : '200', 10) || 200;
+        payload.latencyMs  = parseInt(latEl ? latEl.value : '0', 10) || 0;
+      }
+
+      await fetch('/api/mocks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        // POST with statusCode 0 signals "reconfigure" — the real values can be re-entered
-        body: JSON.stringify({method, url, statusCode: 200, latencyMs: 0, responseBody: ''}),
+        body: JSON.stringify(payload),
       });
-      loadIntercepts();
+      loadData();
     }
 
     async function exportState() {
       const res = await fetch('/api/export', {method: 'POST'});
-      const data = await res.json();
-      alert(data.status === 'saved' ? 'Saved to veritaserum.json ✓' : 'Error saving');
+      alert(res.ok ? 'Saved to veritaserum.json ✓' : 'Error saving');
     }
 
-    loadIntercepts();
-    setInterval(loadIntercepts, 2000);
+    function escapeAttr(str) {
+      return str.replace(/'/g, "\\'");
+    }
+
+    setInterval(loadData, 2000);
+    loadData();
   </script>
 </body>
 </html>
