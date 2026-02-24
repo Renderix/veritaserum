@@ -18,23 +18,29 @@ const (
 	StatusConfigured Status = "configured"
 )
 
-type Intercept struct {
-	Method       string `json:"method"`
-	URL          string `json:"url"`
-	StatusCode   int    `json:"statusCode"`
-	LatencyMs    int    `json:"latencyMs"`
+type MockDefinition struct {
+	Protocol     string `json:"protocol"`      // "HTTP" or "POSTGRES"
+	Method       string `json:"method"`        // HTTP only
+	URL          string `json:"url"`           // HTTP only
+	Query        string `json:"query"`         // POSTGRES only
+	StatusCode   int    `json:"statusCode"`    // HTTP only
+	LatencyMs    int    `json:"latencyMs"`     // HTTP only
 	ResponseBody string `json:"responseBody"`
 	State        Status `json:"state"`
 }
 
-func interceptKey(method, url string) string {
-	return method + " " + url
+func httpKey(method, url string) string {
+	return "HTTP " + method + " " + url
+}
+
+func postgresKey(sql string) string {
+	return "POSTGRES " + sql
 }
 
 // ---- State ---------------------------------------------------------------
 
 var (
-	mocks   = map[string]*Intercept{}
+	mocks   = map[string]*MockDefinition{}
 	mocksMu sync.RWMutex
 )
 
@@ -62,7 +68,6 @@ var uiFiles embed.FS
 func main() {
 	loadState()
 
-	// Proxy server
 	go func() {
 		log.Println("Proxy listening on :9999")
 		if err := http.ListenAndServe(":9999", http.HandlerFunc(proxyHandler)); err != nil {
@@ -70,15 +75,7 @@ func main() {
 		}
 	}()
 
-	// UI + API server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/intercepts", interceptsHandler)  // GET list, POST configure
-	mux.HandleFunc("/api/intercepts/", interceptsHandler) // with trailing path (key)
-	mux.HandleFunc("/api/export", exportHandler)
-	mux.Handle("/", http.FileServer(http.FS(uiFiles)))
+	go StartPostgresMock("54320")
 
-	log.Println("UI listening on :8080  →  http://localhost:8080/ui/index.html")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
-		log.Fatalf("ui: %v", err)
-	}
+	StartAPIServer("8080") // blocks; Gin runs the main goroutine
 }

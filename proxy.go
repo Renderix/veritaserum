@@ -14,7 +14,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := interceptKey(r.Method, targetURL)
+	key := httpKey(r.Method, targetURL)
 
 	mocksMu.RLock()
 	entry, found := mocks[key]
@@ -41,10 +41,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// ---- Cache miss: register as pending --------------------------------
 	mocksMu.Lock()
-	mocks[key] = &Intercept{
-		Method: r.Method,
-		URL:    targetURL,
-		State:  StatusPending,
+	mocks[key] = &MockDefinition{
+		Protocol: "HTTP",
+		Method:   r.Method,
+		URL:      targetURL,
+		State:    StatusPending,
 	}
 	mocksMu.Unlock()
 
