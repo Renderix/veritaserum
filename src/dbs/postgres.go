@@ -1,4 +1,4 @@
-package main
+package dbs
 
 import (
 	"bytes"
@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net"
+
+	"veritaserum/src/store"
 )
 
 func StartPostgresMock(port string) {
@@ -82,13 +84,13 @@ func handlePostgresConn(conn net.Conn) {
 }
 
 func handlePostgresQuery(conn net.Conn, sql string) {
-	key := postgresKey(sql)
+	key := store.PostgresKey(sql)
 
-	mocksMu.RLock()
-	entry, found := mocks[key]
-	mocksMu.RUnlock()
+	store.MocksMu.RLock()
+	entry, found := store.Mocks[key]
+	store.MocksMu.RUnlock()
 
-	if found && entry.State == StatusConfigured {
+	if found && entry.State == store.StatusConfigured {
 		log.Printf("POSTGRES PLAYBACK: %s", sql)
 		if err := sendMockedRows(conn, entry.ResponseBody); err != nil {
 			log.Printf("postgres: sendMockedRows error: %v", err)
@@ -98,13 +100,13 @@ func handlePostgresQuery(conn net.Conn, sql string) {
 
 	// Not found or pending — register as pending
 	if !found {
-		mocksMu.Lock()
-		mocks[key] = &MockDefinition{
+		store.MocksMu.Lock()
+		store.Mocks[key] = &store.MockDefinition{
 			Protocol: "POSTGRES",
 			Query:    sql,
-			State:    StatusPending,
+			State:    store.StatusPending,
 		}
-		mocksMu.Unlock()
+		store.MocksMu.Unlock()
 		log.Printf("POSTGRES INTERCEPT: %s → registered as pending", sql)
 	}
 

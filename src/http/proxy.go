@@ -1,27 +1,29 @@
-package main
+package proxy
 
 import (
 	"io"
 	"log"
 	"net/http"
 	"time"
+
+	"veritaserum/src/store"
 )
 
-func proxyHandler(w http.ResponseWriter, r *http.Request) {
+func Handler(w http.ResponseWriter, r *http.Request) {
 	targetURL := r.RequestURI
 	if targetURL == "" || targetURL == "/" {
 		http.Error(w, "bad request: missing absolute URI", http.StatusBadRequest)
 		return
 	}
 
-	key := httpKey(r.Method, targetURL)
+	key := store.HttpKey(r.Method, targetURL)
 
-	mocksMu.RLock()
-	entry, found := mocks[key]
-	mocksMu.RUnlock()
+	store.MocksMu.RLock()
+	entry, found := store.Mocks[key]
+	store.MocksMu.RUnlock()
 
 	// ---- Playback (configured) ------------------------------------------
-	if found && entry.State == StatusConfigured {
+	if found && entry.State == store.StatusConfigured {
 		if entry.LatencyMs > 0 {
 			time.Sleep(time.Duration(entry.LatencyMs) * time.Millisecond)
 		}
@@ -33,21 +35,21 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Pending (already registered but not yet configured) ------------
-	if found && entry.State == StatusPending {
+	if found && entry.State == store.StatusPending {
 		http.Error(w, "veritaserum: mock pending configuration", http.StatusServiceUnavailable)
 		log.Printf("PENDING   %s %s", r.Method, targetURL)
 		return
 	}
 
 	// ---- Cache miss: register as pending --------------------------------
-	mocksMu.Lock()
-	mocks[key] = &MockDefinition{
+	store.MocksMu.Lock()
+	store.Mocks[key] = &store.MockDefinition{
 		Protocol: "HTTP",
 		Method:   r.Method,
 		URL:      targetURL,
-		State:    StatusPending,
+		State:    store.StatusPending,
 	}
-	mocksMu.Unlock()
+	store.MocksMu.Unlock()
 
 	http.Error(w, "veritaserum: intercepted, configure mock in UI", http.StatusServiceUnavailable)
 	log.Printf("INTERCEPT %s %s  →  registered as pending", r.Method, targetURL)
