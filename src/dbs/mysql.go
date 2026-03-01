@@ -121,28 +121,25 @@ func sendHandshake(mc *mysqlConn) {
 }
 
 func handleMySQLQuery(mc *mysqlConn, sql string) {
-	key := store.MysqlKey(sql)
+	key := store.DBKey(store.ProtoMySQL, sql)
 
-	store.MocksMu.RLock()
-	entry, found := store.Mocks[key]
-	store.MocksMu.RUnlock()
-
-	if found && entry.State == store.StatusConfigured {
+	if i := store.LookupConfigured(store.ProtoMySQL, key); i != nil && i.Response != nil {
 		log.Printf("MYSQL PLAYBACK: %s", sql)
-		if err := sendResultSet(mc, entry.ResponseBody); err != nil {
+		rowsJSON := "[]"
+		if len(i.Response.Rows) > 0 {
+			if b, err := json.Marshal(i.Response.Rows); err == nil {
+				rowsJSON = string(b)
+			}
+		}
+		if err := sendResultSet(mc, rowsJSON); err != nil {
 			log.Printf("mysql: sendResultSet error: %v", err)
 		}
 		return
 	}
 
-	if !found {
-		store.MocksMu.Lock()
-		store.Mocks[key] = &store.MockDefinition{
-			Protocol: "MYSQL",
-			Query:    sql,
-			State:    store.StatusPending,
-		}
-		store.MocksMu.Unlock()
+	if !store.IsPending(store.ProtoMySQL, key) {
+		req := store.InteractionRequest{Query: sql}
+		store.RegisterInteraction(store.ProtoMySQL, key, req)
 		log.Printf("MYSQL INTERCEPT: %s → registered as pending", sql)
 	}
 
