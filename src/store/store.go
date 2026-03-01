@@ -96,66 +96,14 @@ type Schema struct {
 	CreateStatement string `json:"createStatement"`
 }
 
-// ---- ProvisionedDB -------------------------------------------------------
-
-type ProvisionedDB struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	Status      string `json:"status"`
-	ContainerID string `json:"containerId,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	JdbcURL     string `json:"jdbcUrl,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
-
 // ---- Global store --------------------------------------------------------
 
 var (
-	mu              sync.RWMutex
-	interactions    = map[string]*Interaction{}
-	testCases       = map[string]*TestCase{}
-	schemas         = map[string]*Schema{}
-	ProvisionedDBsMu sync.RWMutex
-	ProvisionedDBs  []*ProvisionedDB
+	mu           sync.RWMutex
+	interactions = map[string]*Interaction{}
+	testCases    = map[string]*TestCase{}
+	schemas      = map[string]*Schema{}
 )
-
-// ---- ProvisionedDB helpers -----------------------------------------------
-
-func FailProvisionedDB(id, errMsg string) {
-	ProvisionedDBsMu.Lock()
-	defer ProvisionedDBsMu.Unlock()
-	for _, db := range ProvisionedDBs {
-		if db.ID == id {
-			db.Status = "failed"
-			db.Error = errMsg
-			return
-		}
-	}
-}
-
-func UpdateProvisionedDB(id, containerID string, port int) {
-	ProvisionedDBsMu.Lock()
-	defer ProvisionedDBsMu.Unlock()
-	for _, db := range ProvisionedDBs {
-		if db.ID == id {
-			db.ContainerID = containerID
-			db.Port = port
-			return
-		}
-	}
-}
-
-func ReadyProvisionedDB(id, jdbcURL string) {
-	ProvisionedDBsMu.Lock()
-	defer ProvisionedDBsMu.Unlock()
-	for _, db := range ProvisionedDBs {
-		if db.ID == id {
-			db.Status = "ready"
-			db.JdbcURL = jdbcURL
-			return
-		}
-	}
-}
 
 // ---- Key builders --------------------------------------------------------
 
