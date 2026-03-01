@@ -1,4 +1,8 @@
 import { useState } from 'react'
+import PendingTab from './components/PendingTab'
+import MocksTab from './components/MocksTab'
+import TestCasesTab from './components/TestCasesTab'
+import ImportTab from './components/ImportTab'
 
 type Tab = 'pending' | 'mocks' | 'testcases' | 'import'
 
@@ -26,12 +30,10 @@ export default function App() {
         ))}
       </header>
       <main style={{ flex: 1, padding: 24 }}>
-        <div style={{ color: '#475569' }}>
-          {tab === 'pending' && 'Pending tab — coming soon'}
-          {tab === 'mocks' && 'Mocks tab — coming soon'}
-          {tab === 'testcases' && 'Test Cases tab — coming soon'}
-          {tab === 'import' && 'Import tab — coming soon'}
-        </div>
+        {tab === 'pending' && <PendingTab />}
+        {tab === 'mocks' && <MocksTab />}
+        {tab === 'testcases' && <TestCasesTab />}
+        {tab === 'import' && <ImportTab />}
       </main>
     </div>
   )
