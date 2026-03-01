@@ -84,33 +84,28 @@ func handlePostgresConn(conn net.Conn) {
 }
 
 func handlePostgresQuery(conn net.Conn, sql string) {
-	key := store.PostgresKey(sql)
+	key := store.DBKey(store.ProtoPostgres, sql)
 
-	store.MocksMu.RLock()
-	entry, found := store.Mocks[key]
-	store.MocksMu.RUnlock()
-
-	if found && entry.State == store.StatusConfigured {
+	if i := store.LookupConfigured(store.ProtoPostgres, key); i != nil && i.Response != nil {
 		log.Printf("POSTGRES PLAYBACK: %s", sql)
-		if err := sendMockedRows(conn, entry.ResponseBody); err != nil {
+		rowsJSON := "[]"
+		if len(i.Response.Rows) > 0 {
+			if b, err := json.Marshal(i.Response.Rows); err == nil {
+				rowsJSON = string(b)
+			}
+		}
+		if err := sendMockedRows(conn, rowsJSON); err != nil {
 			log.Printf("postgres: sendMockedRows error: %v", err)
 		}
 		return
 	}
 
-	// Not found or pending — register as pending
-	if !found {
-		store.MocksMu.Lock()
-		store.Mocks[key] = &store.MockDefinition{
-			Protocol: "POSTGRES",
-			Query:    sql,
-			State:    store.StatusPending,
-		}
-		store.MocksMu.Unlock()
+	if !store.IsPending(store.ProtoPostgres, key) {
+		req := store.InteractionRequest{Query: sql}
+		store.RegisterInteraction(store.ProtoPostgres, key, req)
 		log.Printf("POSTGRES INTERCEPT: %s → registered as pending", sql)
 	}
 
-	// Return empty CommandComplete so client doesn't crash
 	sendCommandComplete(conn, "SELECT 0")
 	sendReadyForQuery(conn)
 }
