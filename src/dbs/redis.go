@@ -3,6 +3,7 @@ package dbs
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strconv"
@@ -99,7 +100,7 @@ func readRESP(r *bufio.Reader) ([]string, error) {
 				return nil, err
 			}
 			buf := make([]byte, n+2) // +2 for \r\n
-			if _, err := r.Read(buf); err != nil {
+			if _, err := io.ReadFull(r, buf); err != nil {
 				return nil, err
 			}
 			args = append(args, string(buf[:n]))
