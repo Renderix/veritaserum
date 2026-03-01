@@ -1,15 +1,8 @@
 # Veritaserum
 
-A lightweight service virtualization tool for local development. Intercept outbound HTTP calls and mock database queries through a web UI — no downstream dependencies required.
+A test management sidecar for local development and CI. Proxy all outbound calls from your service through Veritaserum — HTTP, MySQL, Postgres, Redis, and DynamoDB. Unknown requests return 503 and appear as **Pending** in the UI. Configure a mock response, re-trigger, and it replays. Group interactions into named test cases and export them to JSON for headless CI replay.
 
-## What It Does
-
-- **HTTP mocking** — forward proxy on `:9999`. Route your service's outbound HTTP calls through it, intercept them, and configure mock responses.
-- **Database mocking** — wire-protocol mocks for MySQL (`:33060`) and Postgres (`:54320`). Point your JDBC/driver at them, intercept queries, configure mock result sets.
-- **On-demand MySQL provisioning** — spin up a real MySQL 8 Docker container with your schema and seed data on demand. Get back a JDBC URL ready to connect to.
-- **Web UI + REST API** — manage everything at `http://localhost:8080`.
-
-## Getting Started
+## Start
 
 ```bash
 go build -o veritaserum .
@@ -17,114 +10,300 @@ go build -o veritaserum .
 ```
 
 ```
-Proxy      listening on :9999
-MySQL mock listening on :33060
-Postgres   listening on :54320
-UI + API   listening on :8080  →  http://localhost:8080
+HTTP proxy     :9999
+MySQL mock     :33060
+Postgres mock  :54320
+Redis mock     :6380
+UI + API       :8080  →  http://localhost:8080
 ```
 
-## HTTP Mocking
+## Core Flow
 
-Point your service at the forward proxy:
+```
+Your service makes any outbound call
+      │
+      ▼
+Veritaserum intercepts
+      │
+      ├── known mock  →  replay stored response
+      │
+      └── unknown  →  503 back to your service
+                   →  appears as PENDING in UI at :8080
+                   →  fill in response, re-trigger
+                   →  replays from now on
+```
+
+---
+
+## Java
+
+### HTTP (Spring / RestTemplate / HttpClient)
+
+Set the JVM proxy system properties before your application starts:
+
+```java
+System.setProperty("http.proxyHost", "localhost");
+System.setProperty("http.proxyPort", "9999");
+System.setProperty("https.proxyHost", "localhost");
+System.setProperty("https.proxyPort", "9999");
+```
+
+Or pass them on the command line:
 
 ```bash
-HTTP_PROXY=http://localhost:9999 curl http://api.example.com/users
-# → 503: veritaserum: intercepted, configure mock in UI
+java -Dhttp.proxyHost=localhost -Dhttp.proxyPort=9999 \
+     -Dhttps.proxyHost=localhost -Dhttps.proxyPort=9999 \
+     -jar your-service.jar
 ```
 
-The request appears in the **Pending** section of the UI at `http://localhost:8080`. Fill in the status code, latency, and response body, then click **Save Mock**. Hit the same request again — it replays your configured response.
+RestTemplate picks this up automatically. For `java.net.http.HttpClient` (Java 11+):
 
-You can also skip the interception step and configure a mock directly:
+```java
+HttpClient client = HttpClient.newBuilder()
+    .proxy(ProxySelector.of(new InetSocketAddress("localhost", 9999)))
+    .build();
+```
+
+### MySQL (JDBC)
+
+```java
+String url = "jdbc:mysql://localhost:33060/app";
+Connection conn = DriverManager.getConnection(url, "root", "");
+```
+
+### Postgres (JDBC)
+
+```java
+String url = "jdbc:postgresql://localhost:54320/app";
+Connection conn = DriverManager.getConnection(url, "postgres", "");
+```
+
+### Redis (Jedis / Lettuce)
+
+```java
+// Jedis
+Jedis jedis = new Jedis("localhost", 6380);
+
+// Lettuce
+RedisClient client = RedisClient.create("redis://localhost:6380");
+```
+
+### Spring Boot — all at once
+
+```yaml
+# application-dev.yml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:33060/app
+    username: root
+    password: ""
+  data:
+    redis:
+      host: localhost
+      port: 6380
+
+# JVM args (add to your run config or Dockerfile CMD)
+# -Dhttp.proxyHost=localhost -Dhttp.proxyPort=9999
+```
+
+---
+
+## Go
+
+### HTTP
+
+```go
+proxyURL, _ := url.Parse("http://localhost:9999")
+client := &http.Client{
+    Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+}
+
+resp, err := client.Get("http://api.example.com/users")
+```
+
+Or via environment variable (works with the default `http.DefaultClient`):
 
 ```bash
-curl -X POST http://localhost:8080/api/mocks \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "protocol": "HTTP",
-    "method": "GET",
-    "url": "http://api.example.com/users",
-    "statusCode": 200,
-    "latencyMs": 150,
-    "responseBody": "[{\"id\":1,\"name\":\"Alice\"}]"
-  }'
+HTTP_PROXY=http://localhost:9999 go run ./cmd/your-service
 ```
 
-To edit a configured mock, click the **Edit** button on the card in the UI and save again.
+### MySQL (database/sql + go-sql-driver)
 
-### How It Works
+```go
+import _ "github.com/go-sql-driver/mysql"
 
-```
-Your Service  →  HTTP_PROXY=http://localhost:9999  →  Veritaserum
-                                                          │
-                                                    [known mock?]
-                                                     yes  │  no
-                                                          │
-                                               replay  ←──┘──→  register as pending
-                                                              │
-                                                         configure in UI at :8080
+db, err := sql.Open("mysql", "root@tcp(localhost:33060)/app")
 ```
 
-## Database Mocking (MySQL / Postgres)
+### Postgres (pgx / lib/pq)
 
-Point your JDBC driver at the mock servers instead of your real database:
+```go
+// pgx
+conn, err := pgx.Connect(ctx, "postgres://postgres@localhost:54320/app")
 
+// lib/pq
+db, err := sql.Open("postgres", "host=localhost port=54320 dbname=app sslmode=disable")
 ```
-jdbc:mysql://localhost:33060/app
-jdbc:postgresql://localhost:54320/app
+
+### Redis (go-redis)
+
+```go
+rdb := redis.NewClient(&redis.Options{
+    Addr: "localhost:6380",
+})
 ```
 
-On first query, the query is registered as pending in the UI. Configure a JSON response body (the rows to return), save, and subsequent executions of the same query return the mock result set.
+### DynamoDB (AWS SDK v2)
 
-## On-Demand MySQL Provisioning
+```go
+cfg, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithHTTPClient(&http.Client{
+        Transport: &http.Transport{
+            Proxy: http.ProxyURL(func() *url.URL {
+                u, _ := url.Parse("http://localhost:9999")
+                return u
+            }()),
+        },
+    }),
+)
+client := dynamodb.NewFromConfig(cfg)
+```
 
-Spin up a real MySQL 8 container with your schema and seed data:
+---
+
+## Node.js
+
+### HTTP (axios)
 
 ```bash
-curl -X POST http://localhost:8080/api/databases \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "type": "MYSQL",
-    "schema": "CREATE TABLE users (id INT, name VARCHAR(255));",
-    "hydrate": "INSERT INTO users VALUES (1, '\''Alice'\''), (2, '\''Bob'\'');"
-  }'
-# → {"id":"...","type":"MYSQL","status":"provisioning"}
+HTTP_PROXY=http://localhost:9999 node your-service.js
 ```
 
-Poll until ready (MySQL takes 20–60s to start):
+Or configure per-client using `https-proxy-agent`:
 
 ```bash
-curl http://localhost:8080/api/databases
-# → [{"status":"ready","jdbcUrl":"jdbc:mysql://localhost:XXXXX/app?user=root&password=veritaserum"}]
+npm install https-proxy-agent
 ```
 
-Connect directly once ready:
+```js
+const axios = require('axios');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+
+const client = axios.create({
+  httpAgent: new HttpsProxyAgent('http://localhost:9999'),
+  httpsAgent: new HttpsProxyAgent('http://localhost:9999'),
+});
+
+const res = await client.get('http://api.example.com/users');
+```
+
+### HTTP (node-fetch / undici)
+
+```js
+import { fetch, ProxyAgent } from 'undici';
+
+const dispatcher = new ProxyAgent('http://localhost:9999');
+const res = await fetch('http://api.example.com/users', { dispatcher });
+```
+
+### MySQL (mysql2)
+
+```js
+const mysql = require('mysql2/promise');
+
+const conn = await mysql.createConnection({
+  host: 'localhost',
+  port: 33060,
+  user: 'root',
+  password: '',
+  database: 'app',
+});
+```
+
+### Postgres (pg)
+
+```js
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 54320,
+  database: 'app',
+  user: 'postgres',
+  password: '',
+});
+```
+
+### Redis (ioredis)
+
+```js
+const Redis = require('ioredis');
+
+const redis = new Redis({ host: 'localhost', port: 6380 });
+```
+
+### DynamoDB (AWS SDK v3)
+
+```js
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
+const { HttpProxyAgent } = require('http-proxy-agent');
+
+const client = new DynamoDBClient({
+  region: 'us-east-1',
+  requestHandler: new NodeHttpHandler({
+    httpAgent: new HttpProxyAgent('http://localhost:9999'),
+  }),
+});
+```
+
+---
+
+## CI / Headless Replay
+
+Export a test case from the UI, then use it in CI:
 
 ```bash
-mysql -h 127.0.0.1 -P XXXXX -uroot -pveritaserum app -e "SELECT * FROM users;"
+# Replay mode — no UI, loads suite JSON, starts all mocks
+./veritaserum --replay --suite=testdata/create-order.json
+
+# With a timeout (for CI jobs)
+./veritaserum --replay --suite=testdata/create-order.json --timeout=120s
 ```
 
-You can also provision from the UI — use the **Provision Database** section at the top of the page.
+Example GitHub Actions step:
 
-> Requires Docker to be running. Each provisioned instance is an independent container on a random host port.
+```yaml
+- name: Start Veritaserum
+  run: ./veritaserum --replay --suite=testdata/create-order.json &
+
+- name: Run integration tests
+  run: go test ./... -tags=integration
+  # or: mvn verify  /  npm test
+```
+
+---
 
 ## REST API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/pending` | List mocks awaiting configuration |
-| `GET` | `/api/mocks` | List all configured mocks |
-| `POST` | `/api/mocks` | Create or update a mock |
-| `POST` | `/api/databases` | Provision a MySQL Docker container |
-| `GET` | `/api/databases` | List provisioned DB instances |
-| `POST` | `/api/export` | Persist state to `veritaserum.json` |
-
-## Persistence
-
-Click **Export JSON** in the UI (or `POST /api/export`) to save mock state to `veritaserum.json`. State is reloaded from this file automatically on next startup.
-
-Provisioned Docker containers are not persisted — they are tracked in memory only for the lifetime of the process.
+| `GET` | `/api/interactions` | All interactions (pending + configured) |
+| `GET` | `/api/interactions/pending` | Only pending |
+| `POST` | `/api/interactions/:id/configure` | Save a mock response |
+| `GET` | `/api/testcases` | List test cases |
+| `POST` | `/api/testcases` | Create a test case |
+| `PUT` | `/api/testcases/:id` | Rename / update interaction list |
+| `DELETE` | `/api/testcases/:id` | Delete |
+| `GET` | `/api/testcases/:id/export` | Download as JSON |
+| `POST` | `/api/import` | Load a JSON suite |
+| `GET` | `/api/schemas` | List stored DB schemas |
+| `POST` | `/api/schemas` | Save a schema |
+| `POST` | `/api/state/save` | Persist state to `veritaserum.json` |
+| `GET` | `/healthz` | Health check |
 
 ## Requirements
 
 - Go 1.21+
-- Docker (for on-demand MySQL provisioning only)
+- Bun (to rebuild the UI — not needed for the pre-built binary)
