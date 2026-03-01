@@ -86,7 +86,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	key := store.HTTPKey(r.Method, host, path, bodyHash)
 
-	if i := store.LookupConfigured(protocol, key); i != nil {
+	if i := store.LookupConfigured(protocol, key); i != nil && i.Response != nil {
 		if i.Response.LatencyMs > 0 {
 			time.Sleep(time.Duration(i.Response.LatencyMs) * time.Millisecond)
 		}
