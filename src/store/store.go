@@ -141,14 +141,15 @@ func RegisterInteraction(protocol, key string, req InteractionRequest) *Interact
 			return i
 		}
 	}
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	now := time.Now()
+	id := fmt.Sprintf("%d", now.UnixNano())
 	i := &Interaction{
 		ID:         id,
 		Protocol:   protocol,
 		Key:        key,
 		Request:    req,
 		State:      StatePending,
-		CapturedAt: time.Now(),
+		CapturedAt: now,
 	}
 	interactions[id] = i
 	return i
@@ -202,7 +203,7 @@ func GetAllInteractions() []*Interaction {
 func GetPendingInteractions() []*Interaction {
 	mu.RLock()
 	defer mu.RUnlock()
-	out := make([]*Interaction, 0)
+	out := make([]*Interaction, 0, len(interactions))
 	for _, i := range interactions {
 		if i.State == StatePending {
 			out = append(out, i)
@@ -257,10 +258,13 @@ func UpdateTestCase(id, name, description string, interactionIDs []string) error
 	}
 	tc.Description = description
 	if interactionIDs != nil {
-		tc.InteractionIDs = interactionIDs
-		for _, i := range interactions {
-			i.TestCaseID = ""
+		// Clear TestCaseID only on interactions previously in this test case
+		for _, prevID := range tc.InteractionIDs {
+			if i, ok := interactions[prevID]; ok {
+				i.TestCaseID = ""
+			}
 		}
+		tc.InteractionIDs = interactionIDs
 		for _, iid := range interactionIDs {
 			if i, ok := interactions[iid]; ok {
 				i.TestCaseID = id
